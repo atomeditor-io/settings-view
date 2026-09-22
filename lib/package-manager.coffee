@@ -39,15 +39,15 @@ class PackageManager
 
   setProxyServers: (callback) =>
     session = atom.getCurrentWindow().webContents.session
-    session.resolveProxy 'http://atom.io', (httpProxy) =>
+    session.resolveProxy 'http://atomeditor.io', (httpProxy) =>
       @applyProxyToEnv('http_proxy', httpProxy)
-      session.resolveProxy 'https://atom.io', (httpsProxy) =>
+      session.resolveProxy 'https://atomeditor.io', (httpsProxy) =>
         @applyProxyToEnv('https_proxy', httpsProxy)
         callback()
 
   setProxyServersAsync: (callback) =>
-    httpProxyPromise = atom.resolveProxy('http://atom.io').then((proxy) => @applyProxyToEnv('http_proxy', proxy))
-    httpsProxyPromise = atom.resolveProxy('https://atom.io').then((proxy) => @applyProxyToEnv('https_proxy', proxy))
+    httpProxyPromise = atom.resolveProxy('http://atomeditor.io').then((proxy) => @applyProxyToEnv('http_proxy', proxy))
+    httpsProxyPromise = atom.resolveProxy('https://atomeditor.io').then((proxy) => @applyProxyToEnv('https_proxy', proxy))
     Promise.all([httpProxyPromise, httpsProxyPromise]).then(callback)
 
   applyProxyToEnv: (envName, proxy) ->

@@ -1,6 +1,6 @@
 fs = require 'fs-plus'
 path = require 'path'
-{remote} = require 'electron'
+remote = require '@electron/remote'
 
 glob = require 'glob'
 request = require 'request'
@@ -8,7 +8,7 @@ request = require 'request'
 module.exports =
 class AtomIoClient
   constructor: (@packageManager, @baseURL) ->
-    @baseURL ?= 'https://atom.io/api/'
+    @baseURL ?= (process.env.ATOM_API_URL or 'https://atomeditor.io/api').replace(/\/+$/, '') + '/'
     # 12 hour expiry
     @expiry = 1000 * 60 * 60 * 12
     @createAvatarCache()
@@ -84,7 +84,10 @@ class AtomIoClient
         cached =
           data: body
           createdOn: Date.now()
-        localStorage.setItem(@cacheKeyForPath(path), JSON.stringify(cached))
+        try
+          localStorage.setItem(@cacheKeyForPath(path), JSON.stringify(cached))
+        catch
+          # a full index can exceed the localStorage quota; cache is best-effort
         callback(err, cached.data)
       catch error
         callback(error)
@@ -180,41 +183,65 @@ class AtomIoClient
   getCachePath: ->
     @cachePath ?= path.join(remote.app.getPath('userData'), 'Cache', 'settings-view')
 
+  # The registry at atomeditor.io is a static site without a server-side
+  # search endpoint: fetch the full package index (cached like other
+  # requests) and filter it locally, mirroring how apm search works.
   search: (query, options) ->
-    qs = {q: query}
-
+    q = String(query or '').trim().toLowerCase()
+    filter = null
     if options.themes
-      qs.filter = 'theme'
+      filter = 'theme'
     else if options.packages
-      qs.filter = 'package'
-
-    options = {
-      url: "#{@baseURL}packages/search"
-      headers: {'User-Agent': navigator.userAgent}
-      qs: qs
-      gzip: true
-    }
+      filter = 'package'
 
     new Promise (resolve, reject) =>
-      request options, (err, res, body) =>
+      handle = (err, records) =>
         if err
           error = new Error("Searching for \u201C#{query}\u201D failed.")
           error.stderr = err.message
           reject(error)
         else
           try
-            # NOTE: request's json option does not populate err if parsing fails,
-            # so we do it manually
-            body = @parseJSON(body)
+            if not Array.isArray(records)
+              throw new Error('unexpected package index format')
+            matches = []
+            for pkg in records
+              continue unless pkg.releases?.latest? and pkg.metadata?
+              if filter is 'theme' and not (pkg.metadata.theme or pkg.theme)
+                continue
+              if filter is 'package' and (pkg.metadata.theme or pkg.theme)
+                continue
+              name = String(pkg.metadata.name or pkg.name or '').toLowerCase()
+              description = String(pkg.metadata.description or pkg.description or '').toLowerCase()
+              score = -1
+              if q is ''
+                score = 0
+              else if name is q
+                score = 3
+              else if name.startsWith q
+                score = 2
+              else if name.includes q
+                score = 1
+              else if description.includes q
+                score = 0.5
+              continue if score < 0
+              matches.push {pkg, score}
+            matches.sort (a, b) -> b.score - a.score
             resolve(
-              body.filter (pkg) -> pkg.releases?.latest?
-                  .map ({readme, metadata, downloads, stargazers_count, repository}) ->
-                    Object.assign metadata, {readme, downloads, stargazers_count, repository: repository.url}
+              matches.slice(0, 100).map ({pkg}) ->
+                {readme, metadata, downloads, stargazers_count, repository} = pkg
+                Object.assign metadata, {readme, downloads, stargazers_count, repository: repository?.url}
             )
           catch e
             error = new Error("Searching for \u201C#{query}\u201D failed.")
-            error.stderr = e.message + '\n' + body
+            error.stderr = e.message
             reject error
+
+      cached = @fetchFromCache 'packages/'
+      if Array.isArray(cached)
+        handle(null, cached)
+      else
+        @request 'packages/', handle
 
   parseJSON: (s) ->
     JSON.parse(s)
